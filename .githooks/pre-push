@@ -92,7 +92,7 @@ while read local_ref local_sha remote_ref remote_sha; do
         echo "Blocked push to: $branch"
         echo ""
         echo "Allowed branches:"
-        echo "  ${default_branch}        - Crew workers push here directly"
+        echo "  ${default_branch}        - Allowed only when the active workflow permits it"
         echo "  polecat/*   - Polecat working branches"
         echo "  integration/* - Integration branches"
         echo "  beads-sync  - Beads synchronization"
