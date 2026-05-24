@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -312,6 +313,7 @@ func TestFindOwnedDoltTestServerCandidatesFromPS(t *testing.T) {
 		"104 dolt sql-server --data-dir /tmp/gt/.dolt-data",
 		"105 /usr/bin/dolt sql-server --config=/tmp/gt/.dolt-data/config.yaml",
 		"106 dolt status /tmp/gt/.dolt-data",
+		"107 dolt sql-server --port 3307",
 	}, "\n")
 
 	got := findOwnedDoltTestServerCandidatesFromPS(output, townRoot, dataDir)
@@ -323,6 +325,44 @@ func TestFindOwnedDoltTestServerCandidatesFromPS(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got %v, want %v", got, want)
 		}
+	}
+}
+
+func TestReapOwnedTestServersRefusesNonTempRoot(t *testing.T) {
+	if _, err := ReapOwnedTestServers(string(filepath.Separator)); err == nil {
+		t.Fatal("expected non-temp root to be rejected")
+	}
+}
+
+func TestReapOwnedTestServersIgnoresNonDoltPID(t *testing.T) {
+	townRoot := t.TempDir()
+	config := DefaultConfig(townRoot)
+	if err := os.MkdirAll(filepath.Dir(config.PidFile), 0755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+		}
+	})
+	if err := os.WriteFile(config.PidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stopped, err := ReapOwnedTestServers(townRoot)
+	if err != nil {
+		t.Fatalf("ReapOwnedTestServers: %v", err)
+	}
+	if stopped != 0 {
+		t.Fatalf("stopped = %d, want 0", stopped)
+	}
+	if !processIsAlive(cmd.Process.Pid) {
+		t.Fatalf("non-Dolt child process %d was killed", cmd.Process.Pid)
 	}
 }
 

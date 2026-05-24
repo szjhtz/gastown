@@ -32,6 +32,7 @@ func TestInstallCreatesCorrectStructure(t *testing.T) {
 
 	// Run gt install
 	cmd := exec.Command(gtBinary, "install", hqPath, "--name", "test-town", "--dolt-port", doltPort)
+	cmd.Dir = tmpDir
 	cmd.Env = env
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -95,6 +96,7 @@ func TestInstallBeadsHasCorrectPrefix(t *testing.T) {
 
 	// Run gt install (includes beads init by default)
 	cmd := exec.Command(gtBinary, "install", hqPath, "--dolt-port", doltPort)
+	cmd.Dir = tmpDir
 	cmd.Env = env
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -356,6 +358,7 @@ func TestInstallFormulasProvisioned(t *testing.T) {
 
 	// Run gt install (includes beads and formula provisioning)
 	cmd := exec.Command(gtBinary, "install", hqPath, "--dolt-port", doltPort)
+	cmd.Dir = tmpDir
 	cmd.Env = env
 	output, err := cmd.CombinedOutput()
 	if err != nil {

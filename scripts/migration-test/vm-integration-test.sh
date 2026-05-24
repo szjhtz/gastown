@@ -31,6 +31,16 @@ TOWN_ROOT="${1:?Usage: vm-integration-test.sh <town_root>}"
 TOWN_ROOT=$(cd "$TOWN_ROOT" && pwd)  # Absolute path
 DOLT_DATA_DIR="/workspace/dolt-server"
 DOLT_PID_FILE="$DOLT_DATA_DIR/server.pid"
+DOLT_PORT="${DOLT_PORT:-$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(('127.0.0.1', 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)}"
+export GT_DOLT_PORT="$DOLT_PORT"
+export BEADS_DOLT_PORT="$DOLT_PORT"
 REPORT_FILE="/tmp/vm-integration-results.txt"
 MASTER_BACKUP="/tmp/migration-master-backup"
 FAILURES=0
@@ -80,9 +90,26 @@ is_owned_dolt_pid() {
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     [[ -r "/proc/$pid/cmdline" ]] || return 1
 
-    local cmdline
-    cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline")
-    [[ "$cmdline" == *"dolt sql-server"* && "$cmdline" == *"$DOLT_DATA_DIR"* ]]
+    local args=()
+    mapfile -d '' -t args < "/proc/$pid/cmdline"
+    [[ "${#args[@]}" -ge 2 ]] || return 1
+    [[ "$(basename "${args[0]}")" == "dolt" && "${args[1]}" == "sql-server" ]] || return 1
+
+    local data_dir=""
+    local i
+    for ((i = 2; i < ${#args[@]}; i++)); do
+        case "${args[$i]}" in
+            --data-dir)
+                if (( i + 1 < ${#args[@]} )); then
+                    data_dir="${args[$((i + 1))]}"
+                fi
+                ;;
+            --data-dir=*)
+                data_dir="${args[$i]#--data-dir=}"
+                ;;
+        esac
+    done
+    [[ "$data_dir" == "$DOLT_DATA_DIR" ]]
 }
 
 is_dolt_server_running() {
@@ -137,16 +164,17 @@ kill_all_processes() {
 
 # Start dolt server
 start_dolt_server() {
-    log "Starting Dolt server..."
+    log "Starting Dolt server on isolated port $DOLT_PORT..."
     local pid
-    pid=$(sudo -u ubuntu bash -c "nohup dolt sql-server --host 127.0.0.1 --port 3307 --data-dir '$DOLT_DATA_DIR' > '$DOLT_DATA_DIR/server.log' 2>&1 & echo \\$!")
+    pid=$(sudo -u ubuntu bash -c "nohup dolt sql-server --host 127.0.0.1 --port '$DOLT_PORT' --data-dir '$DOLT_DATA_DIR' > '$DOLT_DATA_DIR/server.log' 2>&1 & echo \\$!")
     echo "$pid" > "$DOLT_PID_FILE"
     sleep 3
 
     if is_dolt_server_running; then
         log "Dolt server started (PID $(cat "$DOLT_PID_FILE"))"
     else
-        warn "Dolt server failed to start"
+        warn "Owned Dolt server failed to start on port $DOLT_PORT"
+        return 1
     fi
 }
 
