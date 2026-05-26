@@ -160,7 +160,7 @@ func checkPolecatSafety(target polecatTarget) *SafetyCheckResult {
 
 		if fields.ActiveMR != "" {
 			result.ActiveMR = fields.ActiveMR
-			if blocker := activeMRBlocker(bd, fields.ActiveMR); blocker != "" {
+			if blocker := activeMRBlocker(bd, fields.ActiveMR, agentSourceIssueHint("", fields), false, false); blocker != "" {
 				result.Reasons = append(result.Reasons, blocker)
 			}
 		}

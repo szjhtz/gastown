@@ -863,6 +863,18 @@ func slotOpenDecision(workDir, townRoot, rigName, polecatName, exitType string) 
 	} else {
 		input.GitCheckFailed = true
 	}
+	if fields != nil && fields.ActiveMR != "" {
+		gitSafe := !input.GitCheckFailed && !input.GitDirty && input.StashCount == 0 && input.UnpushedCommits == 0
+		sourceHint := fields.LastSourceIssue
+		if sourceHint == "" {
+			sourceHint = fields.HookBead
+		}
+		assessment := polecat.AssessActiveMR(beadCLIShower{bd: DefaultBdCli(), workDir: workDir}, polecat.ActiveMRInput{ActiveMR: fields.ActiveMR, SourceIssueHint: sourceHint, RequireGitSafe: true, GitSafe: gitSafe})
+		if assessment.Pending {
+			input.ActiveMRPending = true
+			input.ActiveMRReason = assessment.Reason
+		}
+	}
 	return polecat.DecideSlotReuse(input)
 }
 
@@ -1684,10 +1696,8 @@ func hasSuccessfulSubmissionEvidence(snap *agentBeadSnapshot) bool {
 func detectZombieDeadSession(bd *BdCli, workDir, townRoot, rigName, polecatName, sessionName string, t *tmux.Tmux, doneIntent *DoneIntent, detectedAt time.Time, witCfg *config.WitnessThresholds, snap *agentBeadSnapshot) (ZombieResult, bool) {
 	// gt-2gra: Agent state and hook bead are read from the pre-fetched snapshot.
 	snapState, snapHook := "", ""
-	snapActiveMR := ""
 	if snap != nil {
 		snapState, snapHook = snap.AgentState, snap.HookBead
-		snapActiveMR = snap.ActiveMR
 	}
 
 	// Heartbeat v2 check (gt-3vr5): for dead sessions, a fresh heartbeat means
@@ -1724,7 +1734,7 @@ func detectZombieDeadSession(bd *BdCli, workDir, townRoot, rigName, polecatName,
 		// refinery queue. Nuking would delete the remote branch before the refinery
 		// can merge it. The dead session is expected, not a zombie.
 		// gt-2gra: Use snapshot's ActiveMR instead of calling getAgentActiveMR.
-		if hasPendingMRFromSnapshot(bd, workDir, polecatName, snapActiveMR) {
+		if hasPendingMRFromSnapshot(bd, workDir, polecatName, snap) {
 			return ZombieResult{}, false
 		}
 
@@ -3088,13 +3098,14 @@ func hasPendingMR(bd *BdCli, workDir, _, polecatName, agentBeadID string) bool {
 	}
 
 	// Check 2: active_mr on agent bead (set by gt done when MR is created)
-	activeMR := getAgentActiveMR(bd, workDir, agentBeadID)
-	return activeMR != ""
+	activeMR, sourceHint := getAgentMRContext(bd, workDir, agentBeadID)
+	assessment := polecat.AssessActiveMR(beadCLIShower{bd: bd, workDir: workDir}, polecat.ActiveMRInput{ActiveMR: activeMR, SourceIssueHint: sourceHint})
+	return assessment.Pending
 }
 
 // hasPendingMRFromSnapshot checks for a pending MR using a pre-fetched ActiveMR
 // value from the agent bead snapshot, avoiding a redundant bd show call. (gt-2gra)
-func hasPendingMRFromSnapshot(bd *BdCli, workDir, polecatName, activeMR string) bool {
+func hasPendingMRFromSnapshot(bd *BdCli, workDir, polecatName string, snap *agentBeadSnapshot) bool {
 	// Check 1: Cleanup wisp with merge-requested state (created by HandlePolecatDone)
 	wispID, _ := findCleanupWisp(bd, workDir, polecatName)
 	if wispID != "" {
@@ -3102,21 +3113,94 @@ func hasPendingMRFromSnapshot(bd *BdCli, workDir, polecatName, activeMR string) 
 	}
 
 	// Check 2: active_mr from pre-fetched snapshot
-	return activeMR != ""
+	activeMR := ""
+	sourceHint := ""
+	if snap != nil {
+		activeMR = snap.ActiveMR
+		sourceHint = snap.HookBead
+		if snap.Fields != nil {
+			if activeMR == "" {
+				activeMR = snap.Fields.ActiveMR
+			}
+			sourceHint = snap.Fields.LastSourceIssue
+			if sourceHint == "" {
+				sourceHint = snap.Fields.HookBead
+			}
+			if sourceHint == "" {
+				sourceHint = snap.HookBead
+			}
+		}
+	}
+	assessment := polecat.AssessActiveMR(beadCLIShower{bd: bd, workDir: workDir}, polecat.ActiveMRInput{ActiveMR: activeMR, SourceIssueHint: sourceHint})
+	return assessment.Pending
 }
 
-// getAgentActiveMR retrieves the active_mr field from a polecat's agent bead.
-// Returns empty string if the bead doesn't exist or has no active_mr.
-func getAgentActiveMR(bd *BdCli, workDir, agentBeadID string) string {
+// getAgentMRContext retrieves active_mr and durable source context from an agent bead.
+func getAgentMRContext(bd *BdCli, workDir, agentBeadID string) (string, string) {
 	output, err := bd.Exec(workDir, "show", agentBeadID, "--json")
 	if err != nil || output == "" {
-		return ""
+		return "", ""
 	}
 	var issues []struct {
-		ActiveMR string `json:"active_mr"`
+		ActiveMR    string `json:"active_mr"`
+		HookBead    string `json:"hook_bead"`
+		Description string `json:"description"`
 	}
 	if err := json.Unmarshal([]byte(output), &issues); err != nil || len(issues) == 0 {
-		return ""
+		return "", ""
 	}
-	return issues[0].ActiveMR
+	fields := beads.ParseAgentFields(issues[0].Description)
+	activeMR := issues[0].ActiveMR
+	if activeMR == "" && fields != nil {
+		activeMR = fields.ActiveMR
+	}
+	sourceHint := issues[0].HookBead
+	if fields != nil {
+		sourceHint = fields.LastSourceIssue
+		if sourceHint == "" {
+			sourceHint = fields.HookBead
+		}
+		if sourceHint == "" {
+			sourceHint = issues[0].HookBead
+		}
+	}
+	return activeMR, sourceHint
+}
+
+type beadCLIShower struct {
+	bd      *BdCli
+	workDir string
+}
+
+func (s beadCLIShower) Show(issueID string) (*beads.Issue, error) {
+	if s.bd == nil || s.bd.Exec == nil {
+		return nil, fmt.Errorf("bd unavailable")
+	}
+	output, err := s.bd.Exec(s.workDir, "show", issueID, "--json")
+	if err != nil {
+		if isBdNotFoundError(err) {
+			return nil, beads.ErrNotFound
+		}
+		return nil, err
+	}
+	output = strings.TrimSpace(output)
+	if output == "" || output == "[]" || output == "null" {
+		return nil, beads.ErrNotFound
+	}
+	var issues []beads.Issue
+	if err := json.Unmarshal([]byte(output), &issues); err != nil {
+		return nil, err
+	}
+	if len(issues) == 0 {
+		return nil, beads.ErrNotFound
+	}
+	return &issues[0], nil
+}
+
+func isBdNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "no such")
 }

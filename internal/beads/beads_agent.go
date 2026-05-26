@@ -53,6 +53,7 @@ type AgentFields struct {
 	ExitType       string // COMPLETED, ESCALATED, DEFERRED, PHASE_COMPLETE (see witness.ExitType*)
 	MRID           string // MR bead ID (if MR was created)
 	Branch         string // Polecat working branch name
+	LastSourceIssue string // Last source/work bead ID, preserved after hook_bead is cleared
 	MRFailed       bool   // True when MR creation was attempted but failed
 	PushFailed     bool   // True when branch push to origin failed (gas-556)
 	CompletionTime string // RFC3339 timestamp of when gt done was called
@@ -124,6 +125,9 @@ func FormatAgentDescription(title string, fields *AgentFields) string {
 	if fields.Branch != "" {
 		lines = append(lines, fmt.Sprintf("branch: %s", fields.Branch))
 	}
+	if fields.LastSourceIssue != "" {
+		lines = append(lines, fmt.Sprintf("last_source_issue: %s", fields.LastSourceIssue))
+	}
 	if fields.MRFailed {
 		lines = append(lines, "mr_failed: true")
 	}
@@ -182,6 +186,8 @@ func ParseAgentFields(description string) *AgentFields {
 			fields.MRID = value
 		case "branch":
 			fields.Branch = value
+		case "last_source_issue":
+			fields.LastSourceIssue = value
 		case "mr_failed":
 			fields.MRFailed = value == "true"
 		case "push_failed":
@@ -368,7 +374,9 @@ func (b *Beads) ResetAgentBeadForReuse(id, reason string) error {
 	fields.ExitType = ""
 	fields.MRID = ""
 	fields.Branch = ""
+	fields.LastSourceIssue = ""
 	fields.MRFailed = false
+	fields.PushFailed = false
 	fields.CompletionTime = ""
 
 	// Update description with cleared fields
@@ -414,6 +422,7 @@ type AgentFieldUpdates struct {
 	ExitType       *string
 	MRID           *string
 	Branch         *string
+	LastSourceIssue *string
 	MRFailed       *bool
 	PushFailed     *bool // True when branch push to origin failed (gas-556)
 	CompletionTime *string
@@ -480,6 +489,9 @@ func (b *Beads) UpdateAgentDescriptionFields(id string, updates AgentFieldUpdate
 	if updates.Branch != nil {
 		fields.Branch = *updates.Branch
 	}
+	if updates.LastSourceIssue != nil {
+		fields.LastSourceIssue = *updates.LastSourceIssue
+	}
 	if updates.MRFailed != nil {
 		fields.MRFailed = *updates.MRFailed
 	}
@@ -538,6 +550,7 @@ func (b *Beads) UpdateAgentCompletion(id string, meta *CompletionMetadata) error
 		ExitType:       &meta.ExitType,
 		MRID:           &meta.MRID,
 		Branch:         &meta.Branch,
+		LastSourceIssue: &meta.HookBead,
 		MRFailed:       &mrFailed,
 		PushFailed:     &pushFailed,
 		CompletionTime: &meta.CompletionTime,
@@ -553,6 +566,7 @@ func (b *Beads) ClearAgentCompletion(id string) error {
 		ExitType:       &empty,
 		MRID:           &empty,
 		Branch:         &empty,
+		LastSourceIssue: &empty,
 		MRFailed:       &notFailed,
 		PushFailed:     &notFailed,
 		CompletionTime: &empty,

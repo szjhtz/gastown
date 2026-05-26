@@ -2172,6 +2172,8 @@ func (m *Manager) ReuseDecisionForPolecat(name string, state State) SlotReuseDec
 func (m *Manager) reuseDecisionForPolecat(name string, state State) SlotReuseDecision {
 	input := SlotReuseInput{State: state, CleanupStatus: CleanupUnknown}
 	agentID := m.agentBeadID(name)
+	activeMR := ""
+	sourceHint := ""
 	_, fields, err := m.agentBeads().GetAgentBead(agentID)
 	if err != nil {
 		input.GitCheckFailed = true
@@ -2180,6 +2182,11 @@ func (m *Manager) reuseDecisionForPolecat(name string, state State) SlotReuseDec
 		input.HookBead = fields.HookBead
 		input.PushFailed = fields.PushFailed
 		input.MRFailed = fields.MRFailed
+		activeMR = fields.ActiveMR
+		sourceHint = fields.LastSourceIssue
+		if sourceHint == "" {
+			sourceHint = fields.HookBead
+		}
 		if fields.CleanupStatus != "" {
 			input.CleanupStatus = CleanupStatus(fields.CleanupStatus)
 		}
@@ -2213,6 +2220,14 @@ func (m *Manager) reuseDecisionForPolecat(name string, state State) SlotReuseDec
 	// DecideSlotReuse will continue to fail closed on CleanupUnknown.
 	if input.CleanupStatus == CleanupUnknown && !input.GitCheckFailed && !input.GitDirty && input.StashCount == 0 && input.UnpushedCommits == 0 {
 		input.CleanupStatus = CleanupClean
+	}
+	if activeMR != "" {
+		gitSafe := !input.GitCheckFailed && !input.GitDirty && input.StashCount == 0 && input.UnpushedCommits == 0
+		assessment := AssessActiveMR(m.agentBeads(), ActiveMRInput{ActiveMR: activeMR, SourceIssueHint: sourceHint, RequireGitSafe: true, GitSafe: gitSafe})
+		if assessment.Pending {
+			input.ActiveMRPending = true
+			input.ActiveMRReason = assessment.Reason
+		}
 	}
 	return DecideSlotReuse(input)
 }

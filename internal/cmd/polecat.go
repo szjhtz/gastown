@@ -420,18 +420,9 @@ type reuseMRShower interface {
 	Show(issueID string) (*beads.Issue, error)
 }
 
-func activeMRBlocksReuse(bd reuseMRShower, mrID string) bool {
-	if mrID == "" {
-		return false
-	}
-	if bd == nil {
-		return true
-	}
-	mr, err := bd.Show(mrID)
-	if err != nil || mr == nil {
-		return true
-	}
-	return !beads.IssueStatus(mr.Status).IsTerminal()
+func activeMRBlocksReuse(bd reuseMRShower, mrID, sourceHint string) bool {
+	assessment := polecat.AssessActiveMR(bd, polecat.ActiveMRInput{ActiveMR: mrID, SourceIssueHint: sourceHint})
+	return assessment.Pending
 }
 
 func polecatReuseStatus(state polecat.State, cleanupStatus, activeMR, branch string, activeMRBlocks bool) string {
@@ -509,10 +500,17 @@ func runPolecatList(cmd *cobra.Command, args []string) error {
 			running, _ := polecatMgr.IsRunning(p.Name)
 			cleanupStatus := ""
 			activeMR := ""
+			sourceHint := p.Issue
 			agentBeadID := polecatBeadIDForRig(r, r.Name, p.Name)
 			if _, fields, err := bd.GetAgentBead(agentBeadID); err == nil && fields != nil {
 				cleanupStatus = fields.CleanupStatus
 				activeMR = fields.ActiveMR
+				if sourceHint == "" {
+					sourceHint = fields.LastSourceIssue
+				}
+				if sourceHint == "" {
+					sourceHint = fields.HookBead
+				}
 			}
 			state := effectivePolecatState(PolecatListItem{
 				State:          p.State,
@@ -527,7 +525,7 @@ func runPolecatList(cmd *cobra.Command, args []string) error {
 				CleanupStatus:  cleanupStatus,
 				ActiveMR:       activeMR,
 				Branch:         p.Branch,
-				ReuseStatus:    polecatReuseStatus(state, cleanupStatus, activeMR, p.Branch, activeMRBlocksReuse(bd, activeMR)),
+				ReuseStatus:    polecatReuseStatus(state, cleanupStatus, activeMR, p.Branch, activeMRBlocksReuse(bd, activeMR, sourceHint)),
 				SessionRunning: running,
 			})
 			knownNames[p.Name] = true
@@ -1094,18 +1092,50 @@ func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
 		if diagnostic != "" {
 			status.Diagnostics = append(status.Diagnostics, diagnostic)
 		}
+		activeMRAssessment := polecat.ActiveMRAssessment{}
+		if fields.ActiveMR != "" {
+			loadGitState()
+			gitSafe := gitErr == nil && gitState != nil && gitState.Clean
+			activeMRAssessment = polecat.AssessActiveMR(bd, polecat.ActiveMRInput{
+				ActiveMR:        fields.ActiveMR,
+				SourceIssueHint: agentSourceIssueHint(status.Issue, fields),
+				RequireGitSafe:  true,
+				GitSafe:         gitSafe,
+			})
+			if status.Issue == "" && activeMRAssessment.SourceIssue != "" {
+				status.Issue = activeMRAssessment.SourceIssue
+			}
+			if activeMRAssessment.SourceTerminal {
+				beadTerminal = true
+			}
+		}
 		if blocker := cleanupStatusBlockerForRecovery(status.CleanupStatus, partialSpawn); blocker != "" {
 			if status.CleanupStatus == polecat.CleanupUnpushed {
 				loadGitState()
 			}
+<<<<<<< HEAD
 			if staleCleanupStatusCanBeIgnoredForRecovery(status.CleanupStatus, workTerminal, hookSafe, activeMRSafe, gitState, gitErr) {
 				status.Diagnostics = append(status.Diagnostics, fmt.Sprintf("ignored_stale_cleanup_status=%s direct_git_state=clean work_ref=terminal", status.CleanupStatus))
+=======
+			if staleCleanupStatusCanBeIgnoredForRecovery(status.CleanupStatus, beadTerminal, hookBead, activeMRAssessment.Pending, gitState, gitErr) {
+				status.Diagnostics = append(status.Diagnostics, fmt.Sprintf("ignored_stale_cleanup_status=%s direct_git_state=clean assigned_bead=terminal", status.CleanupStatus))
+>>>>>>> e15c4ba5 (WIP: checkpoint (auto))
 			} else {
 				status.Blockers = append(status.Blockers, blocker)
 			}
 		}
+<<<<<<< HEAD
 		loadGitState()
 		if blocker := recoveryGitStateBlocker(p.ClonePath, gitState, gitErr); blocker != "" {
+=======
+		if status.CleanupStatus == "" || status.CleanupStatus == polecat.CleanupUnknown {
+			loadGitState()
+			if blocker := recoveryGitStateBlocker(p.ClonePath, gitState, gitErr); blocker != "" {
+				status.Blockers = append(status.Blockers, blocker)
+			}
+		}
+		if blocker := activeMRAssessment.Reason; activeMRAssessment.Pending && blocker != "" {
+>>>>>>> e15c4ba5 (WIP: checkpoint (auto))
 			status.Blockers = append(status.Blockers, blocker)
 		}
 		if hookBlocker != "" {
@@ -1241,16 +1271,25 @@ func agentHookBead(agentIssue *beads.Issue, fields *beads.AgentFields) string {
 	return ""
 }
 
+<<<<<<< HEAD
 func staleCleanupStatusCanBeIgnoredForRecovery(status polecat.CleanupStatus, workTerminal, hookSafe, activeMRSafe bool, gitState *GitState, gitErr error) bool {
 	return status == polecat.CleanupUnpushed &&
 		workTerminal &&
 		hookSafe &&
 		activeMRSafe &&
+=======
+func staleCleanupStatusCanBeIgnoredForRecovery(status polecat.CleanupStatus, beadTerminal bool, hookBead string, activeMRPending bool, gitState *GitState, gitErr error) bool {
+	return status == polecat.CleanupUnpushed &&
+		beadTerminal &&
+		hookBead == "" &&
+		!activeMRPending &&
+>>>>>>> e15c4ba5 (WIP: checkpoint (auto))
 		gitErr == nil &&
 		gitState != nil &&
 		gitState.Clean
 }
 
+<<<<<<< HEAD
 func hookBeadSafeForCleanup(bd issueShower, hookBead string) (safe bool, terminal bool, blocker string) {
 	if hookBead == "" {
 		return true, false, ""
@@ -1315,6 +1354,19 @@ func cleanupStatusReconcileCandidate(status *RecoveryStatus, p *polecat.Polecat,
 		return previous, false
 	}
 	return previous, true
+=======
+func agentSourceIssueHint(currentIssue string, fields *beads.AgentFields) string {
+	if currentIssue != "" {
+		return currentIssue
+	}
+	if fields == nil {
+		return ""
+	}
+	if fields.LastSourceIssue != "" {
+		return fields.LastSourceIssue
+	}
+	return fields.HookBead
+>>>>>>> e15c4ba5 (WIP: checkpoint (auto))
 }
 
 func partialSpawnWithoutDurableHook(bd issueShower, fields *beads.AgentFields, assignee, currentIssue string) (bool, string) {
@@ -1347,27 +1399,17 @@ func recoveryGitStateBlocker(worktreePath string, gitState *GitState, gitErr err
 	return fmt.Sprintf("git_state=has_uncommitted uncommitted_files=%d", len(gitState.UncommittedFiles))
 }
 
-func activeMRBlocker(bd issueShower, mrID string) string {
-	if mrID == "" {
-		return ""
+func activeMRBlocker(bd issueShower, mrID, sourceHint string, requireGitSafe, gitSafe bool) string {
+	assessment := polecat.AssessActiveMR(bd, polecat.ActiveMRInput{
+		ActiveMR:        mrID,
+		SourceIssueHint: sourceHint,
+		RequireGitSafe:  requireGitSafe,
+		GitSafe:         gitSafe,
+	})
+	if assessment.Pending {
+		return assessment.Reason
 	}
-	if bd == nil {
-		return fmt.Sprintf("active_mr=%s status=unverified", mrID)
-	}
-	mr, err := bd.Show(mrID)
-	if err != nil {
-		if errors.Is(err, beads.ErrNotFound) {
-			return ""
-		}
-		return fmt.Sprintf("active_mr=%s status=lookup_error: %v", mrID, err)
-	}
-	if mr == nil {
-		return ""
-	}
-	if beads.IssueStatus(mr.Status).IsTerminal() {
-		return ""
-	}
-	return fmt.Sprintf("active_mr=%s status=%s", mrID, mr.Status)
+	return ""
 }
 
 func hasSubmittableWorkForRecovery(worktreePath string, targetRefs []string, gitState *GitState, gitErr error) bool {

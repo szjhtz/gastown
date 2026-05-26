@@ -19,6 +19,8 @@ type SlotReuseInput struct {
 	StashCount      int
 	UnpushedCommits int
 	GitCheckFailed  bool
+	ActiveMRPending bool
+	ActiveMRReason  string
 }
 
 // SlotReuseDecision explains whether a polecat can be reused and why not.
@@ -41,6 +43,12 @@ func DecideSlotReuse(in SlotReuseInput) SlotReuseDecision {
 	}
 	if in.MRFailed {
 		return SlotReuseDecision{Reason: "mr-failed"}
+	}
+	if in.ActiveMRPending {
+		if in.ActiveMRReason != "" {
+			return SlotReuseDecision{Reason: in.ActiveMRReason}
+		}
+		return SlotReuseDecision{Reason: "active-mr-pending"}
 	}
 	if !in.CleanupStatus.IsSafe() {
 		if in.CleanupStatus == "" {
